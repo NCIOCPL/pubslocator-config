@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Help"  xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+    <!-- Import required targets and configuration items. -->
+    <Import Project="bin\MSBuild.Community.Tasks.Targets"/> 
+    <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v12.0\WebApplications\Microsoft.WebApplication.targets" />
+    
+    <!-- Set variables. -->
+    <PropertyGroup>
+        <SVNBranch>my_branch</SVNBranch>
+        <SourceLocation>.\_source</SourceLocation>
+        <BuildLocation>.\_build</BuildLocation> 
+        <SVNRoot>https://my_subversion_url.com</SVNRoot>
+        <SVNRetrieveFrom>$(SVNRoot)/branches/$(SVNBranch)</SVNRetrieveFrom>
+        <SVNBranchFolder>$(SVNRoot)/branches/$(SVNBranch)</SVNBranchFolder>
+        <SVNBuildsFolder>$(SVNRoot)/Builds/</SVNBuildsFolder>
+        <SVNTagsFolder>$(SVNRoot)/Tags/</SVNTagsFolder>
+        <PLTierList>Dev QA Stage Prod</PLTierList>
+        <!-- List of Internal and External sites. This is currently only for reference; elements are not used anywhere. -->
+        <PLInternalSiteList>ApplicationManagement NCIPLAdmin NCIPLCC NCIPLLM PERT</PLInternalSiteList>
+        <PLExternalSiteList>GUAM KIOSK NCIPL NCIPLex</PLExternalSiteList>
+    </PropertyGroup>
+
+    
+    <!-- Purge old output folders. -->
+    <Target Name="DoPurge" Outputs="$(Revision)">
+        <Message Text="Purging old folders. Feels Good! *burp* Tony! Toni! Tone!"/>
+        <RemoveDir Directories="$(SourceLocation)" />
+        <RemoveDir Directories="$(BuildLocation)" />
+    </Target>
+
+    
+    <!-- Get our source code from SVN. -->
+    <Target Name="FetchSourceCode" Outputs="$(Revision)">
+        <RemoveDir Directories="$(SourceLocation)" />
+        <RemoveDir Directories="$(BuildLocation)" />
+    
+        <Message Text="Fetching latest source code from $(SVNRetrieveFrom)"/>
+        <SvnExport RepositoryPath="$(SVNRetrieveFrom)" LocalPath="$(SourceLocation)">
+            <Output TaskParameter="Revision" PropertyName="Revision" />
+        </SvnExport>
+        <Message Text="Revision: $(Revision)"/>
+    </Target>
+
+    
+    <!-- Build the solution and copy only the necessary files to the build folder. -->
+    <Target Name="Build">
+        <Message Text="Running msbuild..."/>
+        <Exec IgnoreExitCode="true" Command="msbuild $(SourceLocation)\PubsLocator.sln" />
+        <CallTarget Targets="ConfigTransform" />
+        
+        <!-- Copy the built files to the build location on disk, excluding .NET backend code, transforms, and .svn & packages folders. -->
+        <RoboCopy
+            SourceFolder="$(SourceLocation)" DestinationFolder="$(BuildLocation)"
+            Mirror="True" ExcludeFiles="*.cs;*.csproj;*.sln;*.Dev.config;*.QA.config;*.Stage.config;*.Prod.config" ExcludeFolders=".svn;packages"
+        />
+        
+        <!-- Create the build.txt file for version tracking. -->
+        <CreateProperty Value="Revision: R$(Revision) $([System.DateTime]::Now.ToString(yyyy-MM-dd_HH:mm))">
+            <Output TaskParameter="Value" PropertyName="BuildTxt"/>
+        </CreateProperty>
+        <WriteLinesToFile File="$(BuildLocation)\root\build.txt" Lines="$(BuildTxt)" Overwrite="true"/>
+        <WriteLinesToFile File="$(BuildLocation)\ApplicationManagement\build.txt" Lines="$(BuildTxt)" Overwrite="true"/>
+    </Target>
+    
+    
+    <!--
+    Create the transformed XML configuration files.
+    For each tier, run the msbuild task on the DoTransforms target in BuildPubsLocatorConfigs.
+    This transforms all of the site .config XMLs and saves them to the _configuration folder.
+    -->
+    <Target Name="ConfigTransform">
+        <Exec IgnoreExitCode="true" Command="for %%a in ($(PLTierList)) do msbuild BuildPubsLocatorConfigs.xml /target:DoTransforms /property:Tier=%%a" />
+    </Target>
+
+
+    <!-- 
+    Tags the code revision used in the build based on the $(Revision) 
+    value retrieved from the FetchSourceCode target. 
+    -->
+    <Target Name="SaveBuildToSVN">
+    
+        <!-- Tag Name = R + RevisionNumber -->
+        <CreateProperty Value="$(SVNBranch)-R$(Revision)">
+            <Output TaskParameter="Value" PropertyName="TagName"/>
+        </CreateProperty>
+
+        <CreateProperty Value="$(SVNBuildsFolder)$(TagName)">
+            <Output TaskParameter="Value" PropertyName="BuildsUrl" />
+        </CreateProperty>
+
+        <Message Text="Creating build (saving executables) to: $(TagName)"/>
+        <!--
+        SvnClient is a wrapper for the svn command line.
+        The import command line orders repository and file system path
+        opposite of most other commands, so we have to put the "wrong"
+        values in RepositoryPath and LocalPath.
+        -->
+        <SvnClient RepositoryPath="$(BuildLocation)"
+            LocalPath="$(BuildsUrl)"
+            Command="import"
+            Message="Automatic build of Revision $(Revision) for the dev environment."
+        />
+    </Target>
+  
+  
+    <!--
+    Tags the code revision used in the build based on the $(Revision)
+    value retrieved from the FetchSourceCode target.
+    -->
+    <Target Name="SaveTagToSVN">
+        <!-- Tag Name = R + RevisionNumber -->
+        <CreateProperty Value="$(SVNBranch)-R$(Revision)">
+            <Output TaskParameter="Value" PropertyName="TagName"/>
+        </CreateProperty>
+
+        <CreateProperty Value="$(SVNTagsFolder)$(TagName)">
+            <Output TaskParameter="Value" PropertyName="TagUrl" />
+        </CreateProperty>
+
+        <Message Text="Creating tag: $(TagName)"/>
+
+        <SvnCopy SourcePath="$(SVNBranchFolder)"
+            DestinationPath="$(TagUrl)"
+            Revision="$(Revision)"
+            Message="Automatic build of Revision $(Revision) for the $(TargetEnvironment) environment."
+        />
+    </Target>
+  
+  
+    <!-- The "main" target which defines the list and order of other targets to be run. -->
+    <!--<Target Name="All" DependsOnTargets="ValidateProps">-->
+    <Target Name="All">
+        <Message Text="Building PubsLocator code" />
+        <CallTarget Targets="FetchSourceCode" />
+        <CallTarget Targets="Build" />
+        <CallTarget Targets="SaveBuildToSVN" />
+        <CallTarget Targets="SaveTagToSVN" />
+        <CallTarget Targets="DoPurge" />
+    </Target>
+  
+</Project>
